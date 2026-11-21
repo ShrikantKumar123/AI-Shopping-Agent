@@ -87,4 +87,104 @@ def place_order(product_id: int) -> dict:
     return {"success": True, "order": dict(order)}
 
 
-TOOLS = [search_products, place_order]
+
+
+@tool
+def compare_products(product_ids: list[int]) -> dict:
+    """Compare two or more products using their IDs.
+
+    Args:
+        product_ids: List of product IDs returned by search_products.
+                     Example: [1, 5, 7]
+
+    Returns product details, prices, ratings, review counts,
+    cheapest product and highest-rated product.
+    """
+    # Remove duplicate IDs while preserving order
+    product_ids = list(dict.fromkeys(product_ids))
+
+    if len(product_ids) < 2:
+        return {
+            "success": False,
+            "error": "Please provide at least two product IDs to compare."
+        }
+
+    if len(product_ids) > 5:
+        return {
+            "success": False,
+            "error": "You can compare a maximum of five products at a time."
+        }
+
+    if any(not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0
+           for pid in product_ids):
+        return {
+            "success": False,
+            "error": "All product IDs must be positive integers."
+        }
+
+    placeholders = ",".join("?" for _ in product_ids)
+
+    sql = f"""
+        SELECT id, name, category, price, description, is_organic
+        FROM products
+        WHERE id IN ({placeholders})
+    """
+
+    with _connect() as conn:
+        rows = conn.execute(sql, product_ids).fetchall()
+
+    products_by_id = {row["id"]: dict(row) for row in rows}
+
+    missing_ids = [
+        pid for pid in product_ids
+        if pid not in products_by_id
+    ]
+
+    if missing_ids:
+        return {
+            "success": False,
+            "error": f"Products not found: {missing_ids}"
+        }
+
+    ratings = {
+        item["product_id"]: item
+        for item in get_ratings_for_products(product_ids)
+    }
+
+    products = []
+
+    for pid in product_ids:
+        product = products_by_id[pid]
+        rating = ratings[pid]
+
+        product["is_organic"] = bool(product["is_organic"])
+        product["average_rating"] = rating["average_rating"]
+        product["review_count"] = rating["review_count"]
+
+        products.append(product)
+
+    cheapest = min(products, key=lambda p: p["price"])
+
+    highest_rated = max(
+        products,
+        key=lambda p: p["average_rating"]
+    )
+
+    return {
+        "success": True,
+        "products": products,
+        "comparison": {
+            "cheapest_product": {
+                "id": cheapest["id"],
+                "name": cheapest["name"],
+                "price": cheapest["price"]
+            },
+            "highest_rated_product": {
+                "id": highest_rated["id"],
+                "name": highest_rated["name"],
+                "rating": highest_rated["average_rating"]
+            }
+        }
+    }
+
+TOOLS = [search_products, place_order, compare_products]
