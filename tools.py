@@ -7,9 +7,46 @@ from reviews_api import get_ratings_for_products
 from setup_db import DB_PATH
 
 
+
+
 def _connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS cart_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            cart_id TEXT NOT NULL DEFAULT 'default',
+            product_id INTEGER NOT NULL,
+            quantity INTEGER NOT NULL CHECK(quantity > 0),
+            added_at TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(cart_id, product_id),
+            FOREIGN KEY (product_id) REFERENCES products(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS customer_orders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            order_ref TEXT UNIQUE,
+            status TEXT NOT NULL DEFAULT 'PENDING',
+            total_amount REAL NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            confirmed_at TEXT,
+            cancelled_at TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS customer_order_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            order_id INTEGER NOT NULL,
+            product_id INTEGER NOT NULL,
+            product_name TEXT NOT NULL,
+            unit_price REAL NOT NULL,
+            quantity INTEGER NOT NULL,
+            subtotal REAL NOT NULL,
+            FOREIGN KEY (order_id) REFERENCES customer_orders(id)
+        );
+    """)
+
     return conn
 
 
@@ -86,6 +123,146 @@ def place_order(product_id: int) -> dict:
         order = conn.execute("SELECT * FROM orders WHERE id = ?", (cur.lastrowid,)).fetchone()
     return {"success": True, "order": dict(order)}
 
+
+@tool
+def add_to_cart(product_id: int, quantity: int = 1) -> dict:
+    """Add a product to the shopping cart or increase its quantity.
+
+    Args:
+        product_id: Valid product ID from search_products.
+        quantity: Number of units to add. Must be positive.
+    """
+    if isinstance(product_id, bool) or product_id <= 0:
+        return {"success": False, "error": "Invalid product ID."}
+
+    if isinstance(quantity, bool) or not isinstance(quantity, int) or quantity <= 0:
+        return {"success": False, "error": "Quantity must be a positive integer."}
+
+    with _connect() as conn:
+        product = conn.execute(
+            "SELECT id, name, price FROM products WHERE id = ?",
+            (product_id,)
+        ).fetchone()
+
+        if product is None:
+            return {"success": False, "error": "Product not found."}
+
+        conn.execute("""
+            INSERT INTO cart_items (product_id, quantity)
+            VALUES (?, ?)
+            ON CONFLICT(cart_id, product_id)
+            DO UPDATE SET quantity = quantity + excluded.quantity
+        """, (product_id, quantity))
+
+        item = conn.execute("""
+            SELECT quantity FROM cart_items
+            WHERE cart_id = 'default' AND product_id = ?
+        """, (product_id,)).fetchone()
+
+    return {
+        "success": True,
+        "message": "Product added to cart.",
+        "product_name": product["name"],
+        "quantity": item["quantity"],
+        "unit_price": product["price"],
+        "subtotal": round(product["price"] * item["quantity"], 2)
+    }
+
+
+
+@tool
+def view_cart() -> dict:
+    """Display all items in the shopping cart with quantities and total price."""
+
+    with _connect() as conn:
+        rows = conn.execute("""
+            SELECT
+                p.id AS product_id,
+                p.name,
+                p.price,
+                c.quantity,
+                ROUND(p.price * c.quantity, 2) AS subtotal
+            FROM cart_items c
+            JOIN products p ON p.id = c.product_id
+            WHERE c.cart_id = 'default'
+            ORDER BY c.added_at DESC
+        """).fetchall()
+
+    items = [dict(row) for row in rows]
+
+    total = round(sum(item["subtotal"] for item in items), 2)
+    total_quantity = sum(item["quantity"] for item in items)
+
+    return {
+        "success": True,
+        "items": items,
+        "total_items": len(items),
+        "total_quantity": total_quantity,
+        "total_amount": total
+    }
+
+
+
+@tool
+def update_cart_quantity(product_id: int, quantity: int) -> dict:
+    """Set the exact quantity of an existing cart item.
+
+    Args:
+        product_id: Product ID in the cart.
+        quantity: New quantity. Must be positive.
+    """
+
+    if isinstance(product_id, bool) or product_id <= 0:
+        return {"success": False, "error": "Invalid product ID."}
+
+    if isinstance(quantity, bool) or not isinstance(quantity, int) or quantity <= 0:
+        return {"success": False, "error": "Quantity must be a positive integer."}
+
+    with _connect() as conn:
+        cursor = conn.execute("""
+            UPDATE cart_items
+            SET quantity = ?
+            WHERE cart_id = 'default' AND product_id = ?
+        """, (quantity, product_id))
+
+        if cursor.rowcount == 0:
+            return {"success": False, "error": "Product not found in cart."}
+
+    return {
+        "success": True,
+        "message": "Cart quantity updated.",
+        "product_id": product_id,
+        "quantity": quantity
+    }
+
+
+
+
+@tool
+def remove_from_cart(product_id: int) -> dict:
+    """Remove a product completely from the shopping cart.
+
+    Args:
+        product_id: Product ID to remove.
+    """
+
+    if isinstance(product_id, bool) or product_id <= 0:
+        return {"success": False, "error": "Invalid product ID."}
+
+    with _connect() as conn:
+        cursor = conn.execute("""
+            DELETE FROM cart_items
+            WHERE cart_id = 'default' AND product_id = ?
+        """, (product_id,))
+
+    if cursor.rowcount == 0:
+        return {"success": False, "error": "Product not found in cart."}
+
+    return {
+        "success": True,
+        "message": "Product removed from cart.",
+        "product_id": product_id
+    }
 
 
 
@@ -187,4 +364,231 @@ def compare_products(product_ids: list[int]) -> dict:
         }
     }
 
-TOOLS = [search_products, place_order, compare_products]
+
+
+@tool
+def checkout() -> dict:
+    """Create a pending checkout from all items in the shopping cart.
+
+    The user must explicitly confirm the order using confirm_order
+    before the order is placed.
+    """
+    with _connect() as conn:
+        items = conn.execute("""
+            SELECT
+                p.id AS product_id,
+                p.name AS product_name,
+                p.price AS unit_price,
+                c.quantity,
+                ROUND(p.price * c.quantity, 2) AS subtotal
+            FROM cart_items c
+            JOIN products p ON p.id = c.product_id
+            WHERE c.cart_id = 'default'
+        """).fetchall()
+
+        if not items:
+            return {
+                "success": False,
+                "error": "Your shopping cart is empty."
+            }
+
+        total = round(sum(item["subtotal"] for item in items), 2)
+
+        cursor = conn.execute("""
+            INSERT INTO customer_orders (total_amount)
+            VALUES (?)
+        """, (total,))
+
+        order_id = cursor.lastrowid
+        order_ref = f"ORD-{order_id:06d}"
+
+        conn.execute("""
+            UPDATE customer_orders
+            SET order_ref = ?
+            WHERE id = ?
+        """, (order_ref, order_id))
+
+        for item in items:
+            conn.execute("""
+                INSERT INTO customer_order_items (
+                    order_id,
+                    product_id,
+                    product_name,
+                    unit_price,
+                    quantity,
+                    subtotal
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                order_id,
+                item["product_id"],
+                item["product_name"],
+                item["unit_price"],
+                item["quantity"],
+                item["subtotal"]
+            ))
+
+    return {
+        "success": True,
+        "message": "Checkout created. Awaiting customer confirmation.",
+        "order_id": order_ref,
+        "status": "PENDING",
+        "items": [dict(item) for item in items],
+        "total_amount": total,
+        "requires_confirmation": True
+    }
+
+
+
+
+@tool
+def confirm_order(order_id: str) -> dict:
+    """Confirm a pending checkout using its order reference.
+
+    Args:
+        order_id: Order reference returned by checkout, e.g. ORD-000001.
+    """
+    if not isinstance(order_id, str) or not order_id.strip():
+        return {"success": False, "error": "Invalid order reference."}
+
+    order_id = order_id.strip().upper()
+
+    with _connect() as conn:
+        order = conn.execute("""
+            SELECT * FROM customer_orders
+            WHERE order_ref = ?
+        """, (order_id,)).fetchone()
+
+        if order is None:
+            return {"success": False, "error": "Order not found."}
+
+        if order["status"] != "PENDING":
+            return {
+                "success": False,
+                "error": f"Order cannot be confirmed. Current status: {order['status']}."
+            }
+
+        items = conn.execute("""
+            SELECT product_id, quantity
+            FROM customer_order_items
+            WHERE order_id = ?
+        """, (order["id"],)).fetchall()
+
+        conn.execute("""
+            UPDATE customer_orders
+            SET status = 'CONFIRMED',
+                confirmed_at = datetime('now')
+            WHERE id = ? AND status = 'PENDING'
+        """, (order["id"],))
+
+        # Remove only the cart quantities included in this checkout.
+        for item in items:
+            conn.execute("""
+                DELETE FROM cart_items
+                WHERE cart_id = 'default'
+                  AND product_id = ?
+                  AND quantity = ?
+            """, (item["product_id"], item["quantity"]))
+
+    return {
+        "success": True,
+        "message": "Order confirmed successfully.",
+        "order_id": order_id,
+        "status": "CONFIRMED",
+        "total_amount": order["total_amount"]
+    }
+
+
+@tool
+def get_order_history() -> dict:
+    """Retrieve all previous orders with their products and statuses."""
+
+    with _connect() as conn:
+        orders = conn.execute("""
+            SELECT *
+            FROM customer_orders
+            ORDER BY id DESC
+        """).fetchall()
+
+        result = []
+
+        for order in orders:
+            items = conn.execute("""
+                SELECT
+                    product_name,
+                    unit_price,
+                    quantity,
+                    subtotal
+                FROM customer_order_items
+                WHERE order_id = ?
+            """, (order["id"],)).fetchall()
+
+            result.append({
+                **dict(order),
+                "items": [dict(item) for item in items]
+            })
+
+    return {
+        "success": True,
+        "total_orders": len(result),
+        "orders": result
+    }
+
+
+
+@tool
+def cancel_order(order_id: str) -> dict:
+    """Cancel an order only if its status is PENDING.
+
+    Args:
+        order_id: Order reference, e.g. ORD-000001.
+    """
+
+    if not isinstance(order_id, str) or not order_id.strip():
+        return {"success": False, "error": "Invalid order reference."}
+
+    order_id = order_id.strip().upper()
+
+    with _connect() as conn:
+        order = conn.execute("""
+            SELECT id, status
+            FROM customer_orders
+            WHERE order_ref = ?
+        """, (order_id,)).fetchone()
+
+        if order is None:
+            return {"success": False, "error": "Order not found."}
+
+        if order["status"] != "PENDING":
+            return {
+                "success": False,
+                "error": "Only pending orders can be cancelled."
+            }
+
+        conn.execute("""
+            UPDATE customer_orders
+            SET status = 'CANCELLED',
+                cancelled_at = datetime('now')
+            WHERE id = ? AND status = 'PENDING'
+        """, (order["id"],))
+
+    return {
+        "success": True,
+        "message": "Order cancelled successfully.",
+        "order_id": order_id,
+        "status": "CANCELLED"
+    }
+
+
+TOOLS = [
+    search_products,
+    compare_products,
+    add_to_cart,
+    view_cart,
+    update_cart_quantity,
+    remove_from_cart,
+    checkout,
+    confirm_order,
+    get_order_history,
+    cancel_order
+]
