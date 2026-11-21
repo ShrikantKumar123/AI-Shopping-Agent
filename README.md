@@ -1,96 +1,127 @@
 # 🛒 AI Shopping Agent
 
-An AI-powered shopping assistant built with **LangChain, Groq LLM, Python, Streamlit, and SQLite**. It helps users discover products, compare options, manage shopping carts, place orders, and interact with an AI agent through natural language.
+An AI-powered shopping assistant built using **Python, LangChain, Groq, Streamlit, and SQLite**. It allows users to search grocery products, compare products, manage shopping carts, place orders, and interact with an AI shopping assistant using natural language.
 
-The application uses an LLM-powered agent with tools to perform shopping operations and maintain persistent conversation history.
+The application uses a tool-calling LangChain agent powered by Groq's `openai/gpt-oss-120b` model. It also supports user authentication and persistent, user-specific shopping and conversation data.
 
 ## ✨ Features
 
 ### 1. AI-Powered Product Search
-- Search products using natural language.
-- Filter products based on category, price, rating, and other criteria.
-- Retrieve relevant product information from the database.
+- Search grocery products using natural language.
+- Filter products by keyword, category, price range, and organic status.
+- Filter products using minimum customer ratings.
+- Display product details, average ratings, and review counts.
 
 ### 2. Product Comparison
-- Compare multiple products.
-- Evaluate price and customer ratings.
-- Help users make informed purchasing decisions.
+- Compare two to five products at a time.
+- Compare product prices, ratings, and review counts.
+- Identify the cheapest and highest-rated products.
+- Get AI-assisted product comparison results.
 
-### 3. Shopping Cart Management
+### 3. Shopping Cart
 - Add products to the shopping cart.
-- View cart items and quantities.
+- View cart items, quantities, and total price.
 - Update product quantities.
 - Remove products from the cart.
+- Maintain separate shopping carts for authenticated users.
 
 ### 4. Order Management
 - Create orders from shopping cart items.
-- Confirm pending orders.
-- View order history.
-- Cancel eligible orders.
-- Track order status.
+- Generate unique order references.
+- Review order details before confirmation.
+- Confirm pending orders explicitly.
+- View order history and order statuses.
+- Cancel pending orders.
 
-### 5. Persistent Conversation Memory
-- Automatically save conversations.
-- Access previous conversations.
-- Continue earlier conversations.
+### 5. User Authentication
+- User registration.
+- Secure login and logout.
+- Password hashing using PBKDF2-HMAC-SHA256.
+- Unique email address validation.
+- User-specific shopping cart and order data.
+- User-specific conversation history.
+
+### 6. Persistent Conversation Memory
+- Automatically save user and assistant messages.
 - Create new conversations.
-- Delete conversation history.
+- View previous conversations.
+- Continue an existing conversation.
+- Delete individual conversations.
+- Maintain conversation history after restarting the application.
 
-### 6. Conversational AI Interface
-- Interact with the shopping assistant using natural language.
-- Execute shopping operations through AI-powered tools.
-- Get contextual responses from the agent.
+### 7. Conversational AI Assistant
+- Understand natural-language shopping requests.
+- Select appropriate tools based on user queries.
+- Handle product search, comparison, cart operations, and order management.
+- Answer general grocery-shopping questions.
+- Provide conversational responses without unnecessarily invoking tools.
 
 ## 🧰 Technology Stack
 
 | Technology | Purpose |
 |---|---|
-| Python | Core programming language |
-| LangChain | AI agent orchestration |
+| Python | Core application development |
+| LangChain | AI agent orchestration and tool calling |
 | Groq | LLM inference |
-| GPT-OSS-120B | Language model |
-| Streamlit | User interface |
+| `openai/gpt-oss-120b` | Language model |
+| Streamlit | Interactive chat interface |
 | SQLite | Database and persistent storage |
-| SQL | Data querying and management |
-| Python-dotenv | Environment variable management |
+| PBKDF2-HMAC-SHA256 | Password hashing |
+| python-dotenv | Environment variable management |
 
-## 🏗️ Architecture
-
-The application follows a tool-based AI agent architecture.
+## 🏗️ Application Architecture
 
 ```text
-                 User
-                   |
-                   v
-             Streamlit UI
-                   |
-                   v
-             AI Shopping Agent
-                   |
-              LangChain
-                   |
-                   v
-              Groq LLM
-                   |
-                   v
-             Agent Tools
-                   |
-       +-----------+-----------+
-       |           |           |
-       v           v           v
-   Product      Shopping     Order
-    Search        Cart      Management
-       |           |           |
-       +-----------+-----------+
-                   |
-                   v
-                SQLite
-                   |
-                   v
-          Persistent Storage
+                    User
+                      |
+                      v
+                Streamlit UI
+                      |
+             +--------+--------+
+             |                 |
+             v                 v
+       Authentication     Chat Interface
+             |                 |
+             v                 v
+           SQLite         LangChain Agent
+                               |
+                               v
+                            Groq LLM
+                               |
+                       Tool Selection
+                               |
+           +-------------------+-------------------+
+           |                   |                   |
+           v                   v                   v
+      Product Search      Comparison          Cart & Orders
+           |                   |                   |
+           +-------------------+-------------------+
+                               |
+                               v
+                             SQLite
+                               |
+                 +-------------+-------------+
+                 |                           |
+                 v                           v
+           User Data                  Conversation Memory
+```
 
-       Conversation Memory
-             SQLite
+## 📁 Project Structure
+
+```text
+AI-Shopping-Agent/
+│
+├── app.py              # Streamlit UI, authentication and chat interface
+├── agent.py            # LangChain agent and system prompt
+├── auth.py             # User registration, login and authentication
+├── memory.py           # Persistent conversation memory
+├── setup_db.py         # Database setup and sample product data
+├── tools.py            # Product, comparison, cart and order tools
+├── reviews_api.py      # Product rating and review aggregation
+├── requirements.txt    # Project dependencies
+├── .env                # Environment variables (not committed)
+├── .gitignore
+└── README.md
 ```
 
 ## 🚀 Getting Started
@@ -111,22 +142,20 @@ cd AI-Shopping-Agent
 
 ### 2. Create a Virtual Environment
 
-```bash
-python -m venv .venv
-```
-
-Activate the environment:
-
 **macOS / Linux**
 
 ```bash
+python3 -m venv .venv
+
 source .venv/bin/activate
 ```
 
-**Windows**
+**Windows (PowerShell)**
 
-```bash
-.venv\Scripts\activate
+```powershell
+python -m venv .venv
+
+.venv\Scripts\Activate.ps1
 ```
 
 ### 3. Install Dependencies
@@ -137,13 +166,18 @@ pip install -r requirements.txt
 
 ### 4. Configure Environment Variables
 
-Create a `.env` file in the project root:
+Create a `.env` file in the project root.
 
 ```env
 GROQ_API_KEY=your_groq_api_key
+
+# Optional: Custom SQLite database path
+DB_PATH=../resources/store.db
 ```
 
 Replace `your_groq_api_key` with your actual Groq API key.
+
+**Important:** Never commit your `.env` file or expose your API key publicly.
 
 ### 5. Run the Application
 
@@ -151,58 +185,112 @@ Replace `your_groq_api_key` with your actual Groq API key.
 streamlit run app.py
 ```
 
-The application will open in your browser.
+Open the local URL displayed in your terminal.
+
+### 6. Register and Login
+
+1. Open the application.
+2. Register a new account.
+3. Log in using your credentials.
+4. Start interacting with the AI Shopping Agent.
 
 ## 💬 Example Queries
 
-Try these queries with the AI Shopping Agent:
+### Product Search
 
-- Find organic honey under $20 with a 4.5+ rating.
-- Show me the best-rated coffee.
-- Compare products 1, 2, and 3.
-- Add product 1 to my cart.
-- Show my shopping cart.
-- Update the quantity of product 1.
-- Create an order from my cart.
-- Show my order history.
-- Cancel my pending order.
+```text
+Find organic honey under $20 with a 4.5+ rating.
 
-## 🗄️ Database
+Show me organic snacks under $10.
 
-The application uses SQLite for local data persistence.
+Find the best-rated coffee.
+```
 
-The database stores information related to:
+### Product Comparison
 
-- Products
-- Product reviews
-- Shopping orders
-- Shopping cart data
-- User conversations
-- Conversation messages
+```text
+Compare products 1, 2 and 3.
 
-## 🔐 Environment Variables
+Which product is cheaper?
 
-| Variable | Description |
+Which product has the highest rating?
+```
+
+### Shopping Cart
+
+```text
+Add product 1 to my cart.
+
+Show my shopping cart.
+
+Change the quantity of product 1 to 3.
+
+Remove product 1 from my cart.
+```
+
+### Order Management
+
+```text
+Create an order from my cart.
+
+Show my order history.
+
+Confirm order ORD-000001.
+
+Cancel order ORD-000001.
+```
+
+Use the actual product IDs and order references returned by the application.
+
+### General Questions
+
+```text
+What should I consider when buying organic honey?
+
+What is the difference between organic and regular products?
+
+How can I choose a good-quality coffee?
+```
+
+## 🗄️ Database Design
+
+The application uses SQLite for persistent storage.
+
+| Table | Purpose |
 |---|---|
-| `GROQ_API_KEY` | API key used to access Groq LLM services |
+| `users` | Stores registered user information and password hashes |
+| `products` | Stores grocery product catalog |
+| `reviews` | Stores product reviews and ratings |
+| `cart_items` | Stores user-specific shopping cart items |
+| `customer_orders` | Stores customer orders and statuses |
+| `customer_order_items` | Stores individual items belonging to orders |
+| `conversations` | Stores conversation metadata associated with users |
+| `conversation_messages` | Stores user and assistant messages |
 
-**Important:** Never commit your `.env` file or expose your API key on GitHub.
+The database is initialized automatically by the application when required.
 
-## 🔮 Future Enhancements
+## ⚙️ Environment Variables
 
-- User authentication and authorization.
-- Personalized product recommendations.
-- Product review sentiment analysis.
-- Multi-agent architecture.
-- Agent evaluation and performance monitoring.
-- Human approval for sensitive shopping operations.
+| Variable | Required | Description |
+|---|---|---|
+| `GROQ_API_KEY` | Yes | API key for Groq model access |
+| `DB_PATH` | No | Custom SQLite database file path |
+
+## 🔐 Security Considerations
+
+- Passwords are hashed using PBKDF2-HMAC-SHA256 rather than stored as plain text.
+- Each authenticated user has a separate shopping cart.
+- Order history and conversation history are scoped to the authenticated user.
+- API credentials are managed through environment variables.
+- This project is intended as a learning and demonstration application, not a production-ready e-commerce platform.
+
 
 ## 👨‍💻 Author
 
 **Shrikant Kumar**
 
-GitHub: [ShrikantKumar123](https://github.com/ShrikantKumar123)
+[GitHub – ShrikantKumar123](https://github.com/ShrikantKumar123)
 
 ---
 
-⭐ If you find this project interesting, consider giving it a star!
+If you find this project interesting, consider giving the repository a ⭐.

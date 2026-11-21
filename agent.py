@@ -1,13 +1,21 @@
+
 import os
 
 from dotenv import load_dotenv
 from langchain_groq import ChatGroq
 from langchain.agents import create_agent
-from tools import TOOLS
+
+from tools import (
+    TOOLS,
+    set_current_user_id,
+    reset_current_user_id
+)
 from setup_db import DB_PATH, create_database
 
+
 load_dotenv()
-MODEL_NAME= "openai/gpt-oss-120b"
+
+MODEL_NAME = "openai/gpt-oss-120b"
 
 
 SYSTEM_PROMPT = """
@@ -47,7 +55,6 @@ You are a friendly, helpful, and professional AI shopping assistant for an onlin
 - Help users compare products based on price, rating, and preferences.
 - Keep recommendations relevant to the user's requirements.
 
-
 ## Product Comparison
 - Use the `compare_products` tool whenever users explicitly ask to compare products.
 - First use `search_products` if product IDs are not available in the conversation.
@@ -59,8 +66,6 @@ You are a friendly, helpful, and professional AI shopping assistant for an onlin
 - Highlight the cheapest and highest-rated products.
 - Explain the differences briefly and recommend an option based on the user's priorities.
 - Do not claim that the cheapest product is automatically the best product.
-
-
 
 ## Order Management
 
@@ -90,9 +95,7 @@ You are a friendly, helpful, and professional AI shopping assistant for an onlin
 - Only report cancellation as successful when the tool confirms it.
 - Explain when an order cannot be cancelled.
 
-
 ## Shopping Cart Management
-
 - Use `add_to_cart` when the user asks to add a product to their cart.
 - Always use a valid product ID from search results or conversation context.
 - If the product ID is unknown, search for the product first.
@@ -108,7 +111,6 @@ You are a friendly, helpful, and professional AI shopping assistant for an onlin
 - Always show the final cart total in USD.
 - Do not place an order merely because a product was added to the cart.
 - Adding products to the cart does not mean the user has purchased them.
-
 
 ## General Queries
 - Answer general questions politely and naturally.
@@ -135,27 +137,48 @@ You are a friendly, helpful, and professional AI shopping assistant for an onlin
 All prices must be displayed in USD ($).
 """
 
+
 def ensure_database() -> None:
+    """Initialize the database if it does not exist."""
     if not os.path.exists(DB_PATH):
         create_database()
 
 
 def build_agent():
+    """Create and return the shopping agent."""
     ensure_database()
-    llm = ChatGroq(model=MODEL_NAME, temperature=0)
-    return create_agent(llm, tools=TOOLS, system_prompt=SYSTEM_PROMPT)
+
+    llm = ChatGroq(
+        model=MODEL_NAME,
+        temperature=0
+    )
+
+    agent = create_agent(
+        llm,
+        tools=TOOLS,
+        system_prompt=SYSTEM_PROMPT
+    )
+
+    return agent
 
 
-def chat(agent, messages: list[dict]) -> str:
-    """Run the agent on the full conversation ([{role, content}, ...]) and return its reply."""
-    result = agent.invoke({"messages": messages})
-    return result["messages"][-1].content
+def chat(agent, messages: list[dict], user_id: int) -> str:
+    """
+    Run the shopping agent for an authenticated user.
 
+    The authenticated user's ID is passed through the execution context.
+    It is not exposed as an argument to the AI tools.
+    """
 
+    token = set_current_user_id(user_id)
 
+    try:
+        result = agent.invoke({
+            "messages": messages
+        })
 
+        return result["messages"][-1].content
 
-# llm = ChatGroq(model=model, system_prompt=SYSTEM_PROMPT, api_key=os.environ.get("GROQ_API_KEY"), temperature=0.7, max_tokens=1000)
-
-# response = llm.invoke("Hello! Introduce yourself briefly.")
-# print(response.content)
+    finally:
+        # Always reset the context after agent execution.
+        reset_current_user_id(token)
